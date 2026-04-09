@@ -100,6 +100,9 @@ Examples:
 
   # Enable debug logging
   mmkvdump --dir /path/to/mmkv --id MyMMKV --log-level debug keys
+
+  # Generate fish shell completion (one-time install)
+  mmkvdump --completion fish > ~/.config/fish/completions/mmkvdump.fish
 """
 
 # Maximum column width for a truncated value in `dump` text output.
