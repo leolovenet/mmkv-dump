@@ -105,9 +105,25 @@ Two details in the wrapper matter:
 ### Step 3 — Verify
 
 ```bash
-mmkvdump --version    # expected: mmkvdump 1.0
+mmkvdump --version    # expected: mmkvdump 1.1
 mmkvdump --help
 ```
+
+## Shell completion
+
+`mmkvdump` can emit a shell-completion script for its own CLI, derived
+directly from the argparse metadata so the completions stay in sync with
+the tool. Only **fish** is supported right now; bash and zsh are planned.
+
+```bash
+mmkvdump --completion fish > ~/.config/fish/completions/mmkvdump.fish
+exec fish   # reload the current session
+```
+
+After reloading, tab-completion is available for subcommands, global
+flags, subcommand-specific flags, enumerated choices (`--type`,
+`--format`, `--log-level`), and path arguments (`--dir` offers
+directories, `--crypt-key-file` offers files).
 
 ## Usage
 
@@ -137,6 +153,7 @@ mmkvdump --dir <mmkv-directory> [options] <subcommand>
 | `--single-process`       | Open in single-process mode (default: multi-process)           |
 | `--no-color`             | Disable syntax highlighting                                    |
 | `--log-level <level>`    | MMKV log verbosity: `none`/`debug`/`info`/`warning`/`error`    |
+| `--completion <shell>`   | Print a shell completion script (currently: `fish`) and exit   |
 | `--version`              | Print version and exit                                         |
 
 ## Examples
