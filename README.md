@@ -101,7 +101,7 @@ Two details in the wrapper matter:
 ### Step 3 — Verify
 
 ```bash
-mmkvdump --version    # expected: mmkvdump 1.1
+mmkvdump --version
 mmkvdump --help
 ```
 
