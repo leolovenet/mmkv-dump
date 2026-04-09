@@ -30,23 +30,19 @@ key-value pair in either human-readable or JSON format.
 ### Optional
 
 - **[pygments](https://pypi.org/project/Pygments/)** — enables syntax highlighting
-  for JSON values. Install with `pip install pygments`.
+  for JSON values. Install with `python3 -m pip install pygments`.
 
 ## Installation
 
-### Step 1 — Install the `mmkv` package
+### Step 1 — Install the `mmkv` Python binding
 
-Install `mmkv` for the Python interpreter that will actually run the script:
+`mmkv` is not on PyPI. Build it from source following the upstream
+instructions at <https://github.com/Tencent/MMKV/wiki/python_setup>,
+under whichever Python interpreter you plan to run `mmkvdump` with —
+that's the interpreter that will be able to `import mmkv` afterwards.
 
-```bash
-# For your default python3
-python3 -m pip install mmkv
-
-# ...or for a specific version, if you have multiple installed
-python3.11 -m pip install mmkv
-```
-
-Optional: `pip install pygments` for JSON syntax highlighting.
+Optional: `python3 -m pip install pygments` (under the same interpreter)
+for JSON syntax highlighting.
 
 Verify the install succeeded **under the same interpreter** you plan to use:
 

@@ -53,7 +53,9 @@ The script has a small, flat architecture. Read these sections of
 4. **Commands** (`cmd_instances`, `cmd_keys`, `cmd_get`, `cmd_dump`,
    `cmd_raw`) — each subcommand in its own function.
 5. **CLI** (`build_parser`, `_load_crypt_key`, `_resolve_mode`,
-   `_open_mmkv`, `_install_sigpipe_handler`, `main`).
+   `_open_mmkv`, `_install_sigpipe_handler`, `main`) plus the fish
+   completion generator (`_fish_quote`, `_completion_fish`,
+   `_CompletionAction`).
 
 ## Key Design Decisions (don't undo these)
 
@@ -88,6 +90,35 @@ form.
 `_key_exists()` uses `containsKey()` when available (O(1)) and falls back
 to a linear `kv.keys()` scan. `_infer_and_read()` assumes the caller has
 already confirmed the key exists; it does **not** re-check.
+
+### Fish completion generator mirrors argparse grammar
+
+`_completion_fish` derives the script from `parser._actions` so the
+completion stays in sync with the parser automatically. Four invariants
+worth preserving:
+
+1. **`prog="mmkvdump"` on the top parser.** Without it, argparse falls
+   back to `sys.argv[0]` (which resolves to `mmkvdump.py` under the
+   user's bash wrapper), breaking `--version` output *and* causing the
+   generator to emit `complete -c mmkvdump.py`, a name no user types.
+
+2. **Subcommand guards use `not __fish_seen_subcommand_from <all>`,
+   never `__fish_use_subcommand`.** The latter treats `--dir /path/to/mmkv`
+   as a positional (it doesn't know `--dir` takes a value) and silently
+   suppresses subcommand suggestions after any value-bearing global
+   flag. Fish's own git/docker completions use the negation pattern
+   for the same reason.
+
+3. **The subcommand list is additionally gated on every top-level
+   `required=True` flag being present**, via `__fish_contains_opt`,
+   derived from parser metadata (not hardcoded). Without this guard,
+   tab-completion can fill in `dump` before `--dir` is supplied,
+   producing a command argparse rejects at parse time.
+
+4. **The generated file begins with `complete -c mmkvdump -e`.** Fish
+   accumulates `complete` declarations across re-sources rather than
+   replacing them, so without this line, regenerating the file after
+   an upgrade leaves stale state mixed with the new.
 
 ## Code Style
 
