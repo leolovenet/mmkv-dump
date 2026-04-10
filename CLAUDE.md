@@ -55,7 +55,8 @@ The script has a small, flat architecture. Read these sections of
 5. **CLI** (`build_parser`, `_load_crypt_key`, `_resolve_mode`,
    `_open_mmkv`, `_install_sigpipe_handler`, `main`) plus the shell
    completion layer: `_iter_parser_spec` (parser-neutral walker),
-   `_fish_quote`, `_completion_fish`, and `_CompletionAction`.
+   `_fish_quote`, `_completion_fish`, `_completion_bash`, and
+   `_CompletionAction`.
 
 ## Key Design Decisions (don't undo these)
 
@@ -119,6 +120,40 @@ worth preserving:
    accumulates `complete` declarations across re-sources rather than
    replacing them, so without this line, regenerating the file after
    an upgrade leaves stale state mixed with the new.
+
+### Bash completion generator has its own invariants
+
+`_completion_bash` emits a single `_mmkvdump_completion` function and
+registers it with `complete -F`. Four invariants to preserve:
+
+1. **The `case "$prev" in` dispatcher must list every value-taking
+   flag literally** (not via `-*=*` glob or similar). Bash only fires
+   the correct branch on an exact literal match, and missing one means
+   `--type <TAB>` falls through to the generic state machine and ends
+   up suggesting subcommands instead of the 8 type choices. Opaque
+   value-takers (`--id`, `--crypt-key`, `--grep`) must be present too,
+   with an empty `return` branch, so TAB-after-`--id` is silent rather
+   than incorrectly showing subcommand flags.
+
+2. **The subcommand-detection loop's `skip_pattern` must list the same
+   value-taking global flags** so scanning `COMP_WORDS` correctly
+   treats `--dir /path/to/mmkv` as a flag-plus-value and keeps walking
+   past `/path/to/mmkv` rather than adopting it as a positional
+   subcommand. `skip_pattern` is derived from parser metadata in the
+   generator (all `globals_` with `takes_value=True`).
+
+3. **The required-flag presence check must match both `--foo VAL` and
+   `--foo=VAL` forms.** Unlike fish's `__fish_contains_opt`, we
+   hand-roll the loop in bash, and the `=` form is a single token that
+   bash does not split -- so the check explicitly tests `$w = "--foo"
+   || $w == "--foo="*` per required flag.
+
+4. **Phase 3 (inside-subcommand-scope) only suggests flags when `$cur`
+   starts with `-`.** Bare-word TAB inside a subcommand is a positional
+   (e.g. `get <key>`, which we cannot enumerate), and polluting the
+   menu with flags for a user who is typing a key name is worse than
+   offering nothing. This matches fish's behavior where flag completes
+   only fire for `-`-prefixed tokens.
 
 ## Code Style
 

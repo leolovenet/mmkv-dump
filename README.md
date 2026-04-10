@@ -107,19 +107,44 @@ mmkvdump --help
 
 ## Shell completion
 
-`mmkvdump` can emit a shell-completion script for its own CLI, derived
-directly from the argparse metadata so the completions stay in sync with
-the tool. Only **fish** is supported right now; bash and zsh are planned.
+`mmkvdump` can emit a completion script for fish or bash, derived directly
+from the argparse metadata so the completions stay in sync with the tool.
+zsh support is planned.
+
+Tab-completion covers subcommands, global flags, subcommand-specific
+flags, enumerated choices (`--type`, `--format`, `--log-level`), and path
+arguments (`--dir` offers directories, `--crypt-key-file` offers files).
+The subcommand list is gated on `--dir` being present so tab won't fill
+in a subcommand argparse would then reject.
+
+### Fish
 
 ```bash
 mmkvdump --completion fish > ~/.config/fish/completions/mmkvdump.fish
 exec fish   # reload the current session
 ```
 
-After reloading, tab-completion is available for subcommands, global
-flags, subcommand-specific flags, enumerated choices (`--type`,
-`--format`, `--log-level`), and path arguments (`--dir` offers
-directories, `--crypt-key-file` offers files).
+### Bash
+
+Install into the XDG per-user directory scanned by the `bash-completion`
+package (the common case on modern distributions and on macOS via
+Homebrew's `bash-completion@2`):
+
+```bash
+mkdir -p ~/.local/share/bash-completion/completions
+mmkvdump --completion bash > ~/.local/share/bash-completion/completions/mmkvdump
+```
+
+If you don't have `bash-completion` installed, source the script
+directly from your `~/.bashrc` instead:
+
+```bash
+mmkvdump --completion bash > ~/.mmkvdump-completion.bash
+echo 'source ~/.mmkvdump-completion.bash' >> ~/.bashrc
+```
+
+Start a new bash session (or `source` the file) for the completions to
+take effect.
 
 ## Usage
 

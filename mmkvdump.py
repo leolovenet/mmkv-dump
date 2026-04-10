@@ -780,6 +780,223 @@ def _completion_fish(parser: argparse.ArgumentParser) -> str:
     return "\n".join(out) + "\n"
 
 
+def _completion_bash(parser: argparse.ArgumentParser) -> str:
+    """Generate a bash shell completion script from parser metadata.
+
+    Emits a single ``_{prog}_completion`` function registered with
+    ``complete -F``. The function is a small state machine with four
+    phases, each run on every TAB:
+
+    1. If ``$prev`` is a value-taking flag, complete that flag's
+       argument (path, enumerated choice, or nothing for opaque values).
+    2. Walk the words after ``prog``, skipping flags and their values,
+       to find the current subcommand if any.
+    3. Inside a subcommand scope, suggest only that subcommand's flags.
+    4. Before a subcommand, suggest globals when typing a ``-``-prefixed
+       word, or the subcommand list when typing a bare word AND every
+       top-level ``required=True`` flag is already on the command line.
+
+    Unlike fish, bash has no ``__fish_contains_opt`` / ``__fish_seen_\
+subcommand_from`` helpers, so the state detection is hand-rolled over
+    ``COMP_WORDS``. The value-taking-flag list is emitted both in the
+    ``case "$prev"`` dispatcher and in the subcommand-detection loop
+    (as the ``skip_pattern``) so scanning correctly treats ``--dir
+    /path`` as a flag-plus-value rather than a positional.
+    """
+    spec = _iter_parser_spec(parser)
+    prog = spec["prog"]
+    func = f"_{prog}_completion"
+
+    # Path-completing flags: these are project-specific so the mapping
+    # lives here (not in the walker) to keep the walker shell-neutral.
+    path_compgen = {
+        "--dir": "compgen -d",
+        "--crypt-key-file": "compgen -f",
+    }
+
+    # Classify every value-taking flag into one of three categories:
+    #   path_flags   -- completes via compgen -d / -f / ...
+    #   enum_flags   -- completes from a fixed choice list
+    #   opaque_flags -- takes a value but no useful completion (--id etc.)
+    # Each flag is identified by its first long-option form.
+    path_flags: dict[str, str] = {}
+    enum_flags: dict[str, str] = {}
+    opaque_flags: list[str] = []
+
+    def long_name(flag: dict) -> str | None:
+        return next(
+            (o for o in flag["option_strings"] if o.startswith("--")),
+            None,
+        )
+
+    def classify(flag: dict) -> None:
+        if not flag["takes_value"]:
+            return
+        long = long_name(flag)
+        if long is None:
+            return
+        if long in path_flags or long in enum_flags or long in opaque_flags:
+            return
+        if long in path_compgen:
+            path_flags[long] = path_compgen[long]
+        elif flag["choices"]:
+            enum_flags[long] = " ".join(flag["choices"])
+        else:
+            opaque_flags.append(long)
+
+    for g in spec["globals"]:
+        classify(g)
+    for s in spec["subcommands"]:
+        for f in s["flags"]:
+            classify(f)
+
+    # --- case "$prev" in ... branches ---
+    case_lines: list[str] = []
+    for opt, expr in path_flags.items():
+        case_lines.append(
+            f'        {opt})\n'
+            f'            COMPREPLY=( $({expr} -- "$cur") )\n'
+            f'            return\n'
+            f'            ;;'
+        )
+    for opt, choices in enum_flags.items():
+        case_lines.append(
+            f'        {opt})\n'
+            f'            COMPREPLY=( $(compgen -W "{choices}" -- "$cur") )\n'
+            f'            return\n'
+            f'            ;;'
+        )
+    if opaque_flags:
+        case_lines.append(
+            f'        {"|".join(opaque_flags)})\n'
+            f'            return\n'
+            f'            ;;'
+        )
+    case_block = "\n".join(case_lines)
+
+    # --- Flag-name lists ---
+    def name_list(flags: list[dict]) -> str:
+        """Flatten to a space-separated list of option strings, deduped."""
+        names: list[str] = []
+        for f in flags:
+            for opt in f["option_strings"]:
+                if opt not in names:
+                    names.append(opt)
+        return " ".join(names)
+
+    globals_names = name_list(spec["globals"])
+
+    subcmd_case_lines: list[str] = []
+    for s in spec["subcommands"]:
+        flags_str = name_list(s["flags"])
+        if flags_str:
+            subcmd_case_lines.append(
+                f'                {s["name"]})\n'
+                f'                    COMPREPLY=( $(compgen -W "{flags_str}" -- "$cur") )\n'
+                f'                    ;;'
+            )
+    subcmd_case_block = "\n".join(subcmd_case_lines)
+
+    # --- Subcommand-detection skip pattern (value-taking globals) ---
+    skip_longs: list[str] = []
+    for g in spec["globals"]:
+        if g["takes_value"]:
+            long = long_name(g)
+            if long and long not in skip_longs:
+                skip_longs.append(long)
+    skip_pattern = "|".join(skip_longs) if skip_longs else "--__NONE__"
+
+    subcmd_names = " ".join(s["name"] for s in spec["subcommands"])
+
+    # --- Required-flag presence check ---
+    # Emit one loop per required flag, with a trailing `found=0` reset
+    # for the next iteration. Each loop matches both `--foo VAL` and the
+    # inline `--foo=VAL` form so neither spelling suppresses subcommand
+    # suggestions.
+    required_blocks: list[str] = []
+    for r in spec["required_longs"]:
+        required_blocks.append(
+            f'    for w in "${{COMP_WORDS[@]:1}}"; do\n'
+            f'        if [ "$w" = "--{r}" ] || [[ "$w" == "--{r}="* ]]; then\n'
+            f'            found=1\n'
+            f'            break\n'
+            f'        fi\n'
+            f'    done\n'
+            f'    if [ $found -eq 0 ]; then has_required=0; fi\n'
+            f'    found=0'
+        )
+    required_check = "\n".join(required_blocks)
+
+    return f"""# bash completion for {prog} -- generated by `{prog} --completion bash`
+# Do not edit by hand; regenerate after upgrading {prog}.
+
+{func}() {{
+    local cur prev
+    cur="${{COMP_WORDS[COMP_CWORD]}}"
+    prev="${{COMP_WORDS[COMP_CWORD-1]}}"
+    COMPREPLY=()
+
+    # Phase 1: if $prev is a value-taking flag, complete its argument.
+    case "$prev" in
+{case_block}
+    esac
+
+    # Phase 2: find the current subcommand, if any. Walk tokens after
+    # `{prog}`, skipping known value-taking flags and their values.
+    local subcmd="" i=1 skip=0
+    while [ $i -lt $COMP_CWORD ]; do
+        local w="${{COMP_WORDS[i]}}"
+        if [ $skip -eq 1 ]; then
+            skip=0
+        else
+            case "$w" in
+                {skip_pattern})
+                    skip=1
+                    ;;
+                -*)
+                    ;;
+                *)
+                    subcmd="$w"
+                    break
+                    ;;
+            esac
+        fi
+        i=$((i + 1))
+    done
+
+    # Phase 3: inside a subcommand scope. Only suggest that subcommand's
+    # flags when the user is actually typing a `-`-prefixed word; bare
+    # tokens are positionals (e.g. `get <key>`) that we can't enumerate,
+    # so TAB returns nothing rather than polluting the menu with flags.
+    if [ -n "$subcmd" ]; then
+        if [[ "$cur" == -* ]]; then
+            case "$subcmd" in
+{subcmd_case_block}
+            esac
+        fi
+        return
+    fi
+
+    # Phase 4a: pre-subcommand, typing a flag -> suggest globals.
+    if [[ "$cur" == -* ]]; then
+        COMPREPLY=( $(compgen -W "{globals_names}" -- "$cur") )
+        return
+    fi
+
+    # Phase 4b: pre-subcommand, typing a bare word -> suggest subcommands,
+    # but only if every top-level required flag is already on the command
+    # line (otherwise tab would fill in a subcommand argparse will reject).
+    local has_required=1 found=0
+{required_check}
+    if [ $has_required -eq 1 ]; then
+        COMPREPLY=( $(compgen -W "{subcmd_names}" -- "$cur") )
+    fi
+}}
+
+complete -F {func} {prog}
+"""
+
+
 class _CompletionAction(argparse.Action):
     """Emit a shell completion script and exit.
 
@@ -806,7 +1023,9 @@ class _CompletionAction(argparse.Action):
         )
 
     def __call__(self, parser, namespace, values, option_string=None) -> None:
-        if values == "fish":
+        if values == "bash":
+            sys.stdout.write(_completion_bash(parser))
+        elif values == "fish":
             sys.stdout.write(_completion_fish(parser))
         parser.exit()
 
@@ -823,7 +1042,7 @@ def build_parser() -> argparse.ArgumentParser:
         version=f"%(prog)s {__version__}",
     )
     parser.add_argument(
-        "--completion", action=_CompletionAction, choices=("fish",),
+        "--completion", action=_CompletionAction, choices=("bash", "fish"),
         help="Print a shell completion script for the given shell and exit",
     )
 
