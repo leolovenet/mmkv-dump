@@ -110,11 +110,13 @@ worth preserving:
    flag. Fish's own git/docker completions use the negation pattern
    for the same reason.
 
-3. **The subcommand list is additionally gated on every top-level
-   `required=True` flag being present**, via `__fish_contains_opt`,
-   derived from parser metadata (not hardcoded). Without this guard,
-   tab-completion can fill in `dump` before `--dir` is supplied,
-   producing a command argparse rejects at parse time.
+3. **Subcommand suggestions go through a per-state gate** driven by
+   `_SUBCOMMANDS_NEEDING_INSTANCE` / `_INSTANCE_SELECTOR_LONGS` (see
+   "Per-subcommand required-flag gating" below). Fish uses a generated
+   helper `__mmkvdump_has_opt` rather than the built-in
+   `__fish_contains_opt` so both ``--dir VAL`` and the inline
+   ``--dir=VAL`` forms are recognized; the helper is emitted once at
+   the top of the completion file and shared by every guard.
 
 4. **The generated file begins with `complete -c mmkvdump -e`.** Fish
    accumulates `complete` declarations across re-sources rather than
@@ -186,9 +188,33 @@ registers it with `complete -F`. Four invariants to preserve:
 4. **The required-flag gate lives inside `_mmkvdump_commands`**, not
    as an `_arguments` exclusion. zsh has no first-class way to express
    "suggest this action only if token X is present on the command
-   line", so `_mmkvdump_commands` walks `$words` itself and returns
-   empty when a required flag is missing -- same semantics as fish's
-   `__fish_contains_opt` guard and bash's COMP_WORDS loop.
+   line", so `_mmkvdump_commands` walks `$words` itself and branches
+   the candidate list based on which required globals have been
+   supplied. Same semantics as fish's per-state `__mmkvdump_has_opt`
+   guards and bash's Phase 4b state machine.
+
+### Per-subcommand required-flag gating lives in module constants
+
+Two constants at the top of the file encode the tool's runtime-level
+invariant that `keys`/`get`/`dump`/`raw` need an instance selector
+(``--id`` or ``--default``) in addition to ``--dir``, while
+``instances`` only needs ``--dir``:
+
+- ``_SUBCOMMANDS_NEEDING_INSTANCE``
+- ``_INSTANCE_SELECTOR_LONGS``
+
+Both ``main()``'s manual validation and every shell completion
+generator read these constants to build the same three-state tab
+progression:
+
+1. ``--dir`` missing → suggest ``--dir``
+2. ``--dir`` present, no selector → suggest ``instances`` plus
+   ``--id`` / ``--default``
+3. All present → suggest every subcommand
+
+If a new subcommand is added, these constants MUST be updated in the
+same change; otherwise the runtime rejection and the tab suggestions
+will drift out of alignment.
 
 ## Code Style
 

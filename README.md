@@ -114,8 +114,16 @@ the tool.
 Tab-completion covers subcommands, global flags, subcommand-specific
 flags, enumerated choices (`--type`, `--format`, `--log-level`), and path
 arguments (`--dir` offers directories, `--crypt-key-file` offers files).
-The subcommand list is gated on `--dir` being present so tab won't fill
-in a subcommand argparse would then reject.
+The subcommand list is narrowed by which globals are already present,
+so tab-completion never fills in a command argparse would reject:
+
+- empty `mmkvdump <TAB>` suggests `--dir` (the only thing argparse
+  will accept at that point);
+- `mmkvdump --dir /path <TAB>` suggests `instances` (the one
+  directly-runnable subcommand) plus the instance selectors `--id`
+  and `--default`;
+- once both `--dir` and an instance selector are present, all five
+  subcommands become available.
 
 ### Fish
 
