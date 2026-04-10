@@ -55,8 +55,8 @@ The script has a small, flat architecture. Read these sections of
 5. **CLI** (`build_parser`, `_load_crypt_key`, `_resolve_mode`,
    `_open_mmkv`, `_install_sigpipe_handler`, `main`) plus the shell
    completion layer: `_iter_parser_spec` (parser-neutral walker),
-   `_fish_quote`, `_completion_fish`, `_completion_bash`, and
-   `_CompletionAction`.
+   `_fish_quote`, `_zsh_quote`, `_completion_fish`, `_completion_bash`,
+   `_completion_zsh`, and `_CompletionAction`.
 
 ## Key Design Decisions (don't undo these)
 
@@ -154,6 +154,41 @@ registers it with `complete -F`. Four invariants to preserve:
    menu with flags for a user who is typing a key name is worse than
    offering nothing. This matches fish's behavior where flag completes
    only fire for `-`-prefixed tokens.
+
+### Zsh completion generator has its own invariants
+
+`_completion_zsh` emits a `#compdef`-style file using zsh's declarative
+`_arguments` DSL. Four invariants to preserve:
+
+1. **`#compdef mmkvdump` must be the first line, and the installed file
+   must be named `_mmkvdump` (leading underscore + exact command
+   name).** `compinit` scans `$fpath` for files whose name starts with
+   `_`, reads the `#compdef` directive from the first line, and uses
+   both together to register `_comps[mmkvdump]=_mmkvdump`. Break either
+   half and the completion is silently inactive.
+
+2. **The file ends with `_mmkvdump "$@"`** -- this is the canonical
+   zsh autoload self-call pattern, not a bug. When compinit autoloads
+   the function, zsh runs the entire file body once; the function
+   definition is followed by an immediate invocation with the
+   inherited args. Sourcing the file directly in a plain shell prints
+   `_arguments: command not found` because the completion system isn't
+   loaded, but that's an artifact of the non-standard usage, not a
+   defect.
+
+3. **Each subcommand with a positional arg declares it as `'N:name:'`
+   in its inner `_arguments` call** (derived from the walker's
+   `positionals` field). Without the declaration, zsh offers the
+   subcommand's flags even when the user is typing a positional
+   (e.g. a key name for `get`), which matches the Phase-3 issue bash
+   had to work around via a `cur == -*` gate.
+
+4. **The required-flag gate lives inside `_mmkvdump_commands`**, not
+   as an `_arguments` exclusion. zsh has no first-class way to express
+   "suggest this action only if token X is present on the command
+   line", so `_mmkvdump_commands` walks `$words` itself and returns
+   empty when a required flag is missing -- same semantics as fish's
+   `__fish_contains_opt` guard and bash's COMP_WORDS loop.
 
 ## Code Style
 

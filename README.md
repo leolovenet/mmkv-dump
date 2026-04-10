@@ -107,9 +107,9 @@ mmkvdump --help
 
 ## Shell completion
 
-`mmkvdump` can emit a completion script for fish or bash, derived directly
-from the argparse metadata so the completions stay in sync with the tool.
-zsh support is planned.
+`mmkvdump` can emit a completion script for fish, bash, or zsh, derived
+directly from the argparse metadata so the completions stay in sync with
+the tool.
 
 Tab-completion covers subcommands, global flags, subcommand-specific
 flags, enumerated choices (`--type`, `--format`, `--log-level`), and path
@@ -146,6 +146,29 @@ echo 'source ~/.mmkvdump-completion.bash' >> ~/.bashrc
 Start a new bash session (or `source` the file) for the completions to
 take effect.
 
+### Zsh
+
+Save the completion file as `_mmkvdump` (with the leading underscore --
+zsh's autoloader only reads files starting with `_`) into a directory on
+your `$fpath`. The typical per-user location:
+
+```bash
+mkdir -p ~/.zsh/completions
+mmkvdump --completion zsh > ~/.zsh/completions/_mmkvdump
+```
+
+If `~/.zsh/completions` is not already on your `$fpath`, add it in
+`~/.zshrc` **before** the call to `compinit`:
+
+```zsh
+fpath=(~/.zsh/completions $fpath)
+autoload -Uz compinit && compinit
+```
+
+Start a new zsh session (or `exec zsh`) for the completions to take
+effect. If you edit the file and zsh is still serving the old version
+from its cache, delete `~/.zcompdump*` and re-run `compinit`.
+
 ## Usage
 
 ```
@@ -174,7 +197,7 @@ mmkvdump --dir <mmkv-directory> [options] <subcommand>
 | `--single-process`       | Open in single-process mode (default: multi-process)           |
 | `--no-color`             | Disable syntax highlighting                                    |
 | `--log-level <level>`    | MMKV log verbosity: `none`/`debug`/`info`/`warning`/`error`    |
-| `--completion <shell>`   | Print a shell completion script (currently: `fish`) and exit   |
+| `--completion <shell>`   | Print a shell completion script (`bash`/`fish`/`zsh`) and exit |
 | `--version`              | Print version and exit                                         |
 
 ## Examples

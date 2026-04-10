@@ -13,7 +13,7 @@ Prerequisite:
 # fail to parse the `str | None` annotations used throughout the script).
 from __future__ import annotations
 
-__version__ = "1.1"
+__version__ = "1.2"
 
 import sys
 
@@ -100,9 +100,6 @@ Examples:
 
   # Enable debug logging
   mmkvdump --dir /path/to/mmkv --id MyMMKV --log-level debug keys
-
-  # Generate fish shell completion (one-time install)
-  mmkvdump --completion fish > ~/.config/fish/completions/mmkvdump.fish
 """
 
 # Maximum column width for a truncated value in `dump` text output.
@@ -581,6 +578,17 @@ def _fish_quote(s: str) -> str:
     return "'" + s.replace("\\", "\\\\").replace("'", "\\'") + "'"
 
 
+def _zsh_quote(s: str) -> str:
+    """Escape a string for inclusion inside zsh single quotes.
+
+    Unlike fish, zsh single quotes do NOT interpret escape sequences --
+    a single quote simply cannot appear inside ``'...'``. The POSIX idiom
+    is to close the string, inject an escaped quote, and reopen:
+    ``'foo'\\''bar'`` which zsh concatenates into ``foo'bar``.
+    """
+    return "'" + s.replace("'", "'\\''") + "'"
+
+
 def _iter_parser_spec(parser: argparse.ArgumentParser) -> dict:
     """Walk an ``ArgumentParser`` and return a shell-neutral spec.
 
@@ -593,8 +601,8 @@ def _iter_parser_spec(parser: argparse.ArgumentParser) -> dict:
 
     * ``prog`` -- the canonical command name (``parser.prog``).
     * ``globals`` -- list of top-level flag descriptors.
-    * ``subcommands`` -- list of ``{name, help, flags}`` dicts, one per
-      sub-parser, in insertion order.
+    * ``subcommands`` -- list of ``{name, help, flags, positionals}``
+      dicts, one per sub-parser, in insertion order.
     * ``required_longs`` -- long-option names (without the ``--`` prefix)
       of every top-level ``required=True`` flag. Completion generators
       gate the subcommand list on all of these being present.
@@ -604,6 +612,12 @@ def _iter_parser_spec(parser: argparse.ArgumentParser) -> dict:
     ``is_help`` exists so generators can special-case ``-h/--help``
     (which is duplicated across every sub-parser and should only be
     emitted once unconditioned at the top level).
+
+    Each positional descriptor is ``{name, help}``. Only the zsh
+    generator currently consumes these (to declare the positional in
+    ``_arguments`` so zsh knows the token shape); fish and bash ignore
+    the field. It's still carried here so the walker stays the single
+    source of truth.
     """
     def describe(a: argparse.Action) -> dict:
         return {
@@ -624,6 +638,16 @@ def _iter_parser_spec(parser: argparse.ArgumentParser) -> dict:
             and a.option_strings
         ]
 
+    def positionals_of(p: argparse.ArgumentParser) -> list[dict]:
+        # Return positional args in declaration order, skipping the
+        # subparser pseudo-action. Used by zsh's _arguments spec.
+        return [
+            {"name": a.dest, "help": a.help or ""}
+            for a in p._actions
+            if not isinstance(a, argparse._SubParsersAction)
+            and not a.option_strings
+        ]
+
     sub_action = next(
         (a for a in parser._actions if isinstance(a, argparse._SubParsersAction)),
         None,
@@ -639,6 +663,7 @@ def _iter_parser_spec(parser: argparse.ArgumentParser) -> dict:
                 "name": name,
                 "help": help_by_name.get(name, ""),
                 "flags": flags_of(sp),
+                "positionals": positionals_of(sp),
             })
 
     globals_ = flags_of(parser)
@@ -997,6 +1022,182 @@ complete -F {func} {prog}
 """
 
 
+def _completion_zsh(parser: argparse.ArgumentParser) -> str:
+    """Generate a zsh shell completion script from parser metadata.
+
+    Emits a ``#compdef``-style file that defines ``_{prog}`` using
+    zsh's declarative ``_arguments`` DSL. Globals are listed inline on
+    the top-level ``_arguments`` call; the subcommand positional
+    dispatches via the ``->args`` state so each sub-parser can then
+    call ``_arguments`` again with its own flag set.
+
+    The required-flag gate (subcommand list is only suggested when
+    --dir is already present) lives inside ``_{prog}_commands``, which
+    walks ``$words`` and returns empty when a required flag is
+    missing. Same semantics as fish's ``__fish_contains_opt`` guard
+    and bash's COMP_WORDS loop.
+    """
+    spec = _iter_parser_spec(parser)
+    prog = spec["prog"]
+    func = f"_{prog}"
+    commands_func = f"_{prog}_commands"
+
+    # Project-specific path completion hints.
+    path_actions = {
+        "--dir": "_directories",
+        "--crypt-key-file": "_files",
+    }
+
+    def spec_entries(flag: dict) -> list[str]:
+        """Build ``_arguments`` spec entries for one flag.
+
+        Returns a list because multi-form flags (e.g. ``-h/--help``)
+        emit one entry per form, each with an exclusion prefix so that
+        having one form suppresses the other. Single-form flags return
+        a one-element list.
+        """
+        opts = flag["option_strings"]
+        # Escape `[` / `]` inside the description (unlikely for this
+        # parser but keep the generator robust).
+        safe_desc = flag["help"].replace("[", "\\[").replace("]", "\\]")
+        takes_value = flag["takes_value"]
+
+        if takes_value:
+            long = next((o for o in opts if o.startswith("--")), opts[0])
+            msg_name = long.lstrip("-")
+            if long in path_actions:
+                action = path_actions[long]
+            elif flag["choices"]:
+                action = "(" + " ".join(flag["choices"]) + ")"
+            else:
+                action = ""
+            tail = f"[{safe_desc}]:{msg_name}:{action}"
+        else:
+            tail = f"[{safe_desc}]"
+
+        def form(opt: str) -> str:
+            # zsh marks value-taking long options with ``=`` and short
+            # options with ``+`` so both ``--foo VAL`` and ``--foo=VAL``
+            # forms are accepted.
+            if not takes_value:
+                return opt + tail
+            return (opt + "=" + tail) if opt.startswith("--") else (opt + "+" + tail)
+
+        if len(opts) == 1:
+            return [_zsh_quote(form(opts[0]))]
+
+        # Multi-form: ``(-h --help)-h[desc]`` per form so zsh suppresses
+        # the other alias once one is already on the line.
+        exclusion = "(" + " ".join(opts) + ")"
+        return [_zsh_quote(exclusion + form(opt)) for opt in opts]
+
+    # --- Global spec entries ---
+    global_entries: list[str] = []
+    for g in spec["globals"]:
+        global_entries.extend(spec_entries(g))
+
+    # --- Subcommand dispatch cases ---
+    # Each case calls `_arguments` again with its own flag set AND any
+    # positional args derived from the sub-parser (e.g. `get <key>`).
+    subcmd_case_blocks: list[str] = []
+    for s in spec["subcommands"]:
+        inner_entries: list[str] = []
+        for f in s["flags"]:
+            inner_entries.extend(spec_entries(f))
+        for idx, pos in enumerate(s["positionals"], start=1):
+            # Positional spec: "N:msg:action". We use an empty action
+            # because the only positionals in this tool are MMKV keys,
+            # which we cannot enumerate without opening the database.
+            inner_entries.append(_zsh_quote(f"{idx}:{pos['name']}:"))
+
+        if inner_entries:
+            args_body = " \\\n                        ".join(inner_entries)
+            subcmd_case_blocks.append(
+                f"                {s['name']})\n"
+                f"                    _arguments \\\n"
+                f"                        {args_body}\n"
+                f"                    ;;"
+            )
+        else:
+            # Subcommand with no flags or positionals (shouldn't happen
+            # in practice because every sub-parser has at least -h/--help,
+            # but keep the branch for future-proofness).
+            subcmd_case_blocks.append(
+                f"                {s['name']})\n"
+                f"                    ;;"
+            )
+    subcmd_case_body = "\n".join(subcmd_case_blocks)
+
+    # --- Required-flag gate inside _{prog}_commands ---
+    # Emit one loop per required flag; each matches both "--foo VAL"
+    # and the inline "--foo=VAL" form.
+    required_blocks: list[str] = []
+    for r in spec["required_longs"]:
+        required_blocks.append(
+            f"    found=0\n"
+            f"    for (( i=2; i<=${{#words}}; i++ )); do\n"
+            f'        case "${{words[i]}}" in\n'
+            f"            --{r}|--{r}=*) found=1; break ;;\n"
+            f"        esac\n"
+            f"    done\n"
+            f"    if [[ $found -eq 0 ]]; then has_required=0; fi"
+        )
+    required_check = "\n".join(required_blocks)
+
+    # --- Subcommand list for _describe ---
+    # ``name:description`` format with `:` escaped inside descriptions.
+    cmd_list_entries: list[str] = []
+    for s in spec["subcommands"]:
+        safe_help = s["help"].replace(":", "\\:")
+        cmd_list_entries.append(_zsh_quote(f"{s['name']}:{safe_help}"))
+    cmd_list_body = "\n        ".join(cmd_list_entries)
+
+    global_args_body = (
+        " \\\n        ".join(global_entries)
+        + " \\\n        '1:command:" + commands_func + "'"
+        + " \\\n        '*::arg:->args'"
+    )
+
+    return f"""#compdef {prog}
+# zsh completion for {prog} -- generated by `{prog} --completion zsh`
+# Do not edit by hand; regenerate after upgrading {prog}.
+
+{func}() {{
+    local state line curcontext="$curcontext"
+
+    _arguments -C \\
+        {global_args_body}
+
+    case $state in
+        args)
+            case "$line[1]" in
+{subcmd_case_body}
+            esac
+            ;;
+    esac
+}}
+
+{commands_func}() {{
+    # Gate: only suggest subcommands when every top-level required flag
+    # is already on the command line. Matches fish's __fish_contains_opt
+    # and bash's COMP_WORDS loop.
+    local i has_required=1 found=0
+{required_check}
+    if [[ $has_required -eq 0 ]]; then
+        return
+    fi
+
+    local -a commands
+    commands=(
+        {cmd_list_body}
+    )
+    _describe -t commands '{prog} command' commands
+}}
+
+{func} "$@"
+"""
+
+
 class _CompletionAction(argparse.Action):
     """Emit a shell completion script and exit.
 
@@ -1027,6 +1228,8 @@ class _CompletionAction(argparse.Action):
             sys.stdout.write(_completion_bash(parser))
         elif values == "fish":
             sys.stdout.write(_completion_fish(parser))
+        elif values == "zsh":
+            sys.stdout.write(_completion_zsh(parser))
         parser.exit()
 
 
@@ -1042,7 +1245,7 @@ def build_parser() -> argparse.ArgumentParser:
         version=f"%(prog)s {__version__}",
     )
     parser.add_argument(
-        "--completion", action=_CompletionAction, choices=("bash", "fish"),
+        "--completion", action=_CompletionAction, choices=("bash", "fish", "zsh"),
         help="Print a shell completion script for the given shell and exit",
     )
 
