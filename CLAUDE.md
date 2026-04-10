@@ -53,9 +53,9 @@ The script has a small, flat architecture. Read these sections of
 4. **Commands** (`cmd_instances`, `cmd_keys`, `cmd_get`, `cmd_dump`,
    `cmd_raw`) — each subcommand in its own function.
 5. **CLI** (`build_parser`, `_load_crypt_key`, `_resolve_mode`,
-   `_open_mmkv`, `_install_sigpipe_handler`, `main`) plus the fish
-   completion generator (`_fish_quote`, `_completion_fish`,
-   `_CompletionAction`).
+   `_open_mmkv`, `_install_sigpipe_handler`, `main`) plus the shell
+   completion layer: `_iter_parser_spec` (parser-neutral walker),
+   `_fish_quote`, `_completion_fish`, and `_CompletionAction`.
 
 ## Key Design Decisions (don't undo these)
 
