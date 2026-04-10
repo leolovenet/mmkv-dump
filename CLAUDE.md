@@ -92,6 +92,30 @@ form.
 to a linear `kv.keys()` scan. `_infer_and_read()` assumes the caller has
 already confirmed the key exists; it does **not** re-check.
 
+### Timestamp interpretation in `raw` is range-gated
+
+`cmd_raw` adds a "Time interpretations" block that formats integer
+getter values as local datetimes when they fall in the 2001-2200
+Unix-epoch window (bounds in `_TIMESTAMP_MIN_SECONDS` /
+`_TIMESTAMP_MAX_SECONDS`). The gate rejects zero, small counters
+(1, 1000, etc.), negative values, and implausibly old/future dates.
+Local timezone is intentional: the primary use case is "when did
+this field last change", which users recognize against their own
+wall clock. Do NOT auto-infer timestamps in `get` or `dump` — the
+range filter has false positives for normal integers that happen
+to land in 2001-2200, and `raw`'s explicit contract is "every
+possible interpretation", which is where this belongs.
+
+All four unit candidates (seconds, milliseconds, microseconds,
+nanoseconds) stay in `_TIMESTAMP_UNITS` even though microseconds
+and nanoseconds are essentially never used in MMKV data (which
+comes mostly from Android/iOS apps where Java-style milliseconds
+dominate). The decision to keep them is deliberate: `raw`'s
+contract is exhaustive interpretation, the range filter makes
+false positives very unlikely (the valid windows are narrow and
+specific), and the added code is six lines. Don't delete them on
+YAGNI grounds without re-reading this note.
+
 ### Fish completion generator mirrors argparse grammar
 
 `_completion_fish` derives the script from `parser._actions` so the

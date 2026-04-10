@@ -13,7 +13,7 @@ Prerequisite:
 # fail to parse the `str | None` annotations used throughout the script).
 from __future__ import annotations
 
-__version__ = "1.2.1"
+__version__ = "1.3"
 
 import sys
 
@@ -29,6 +29,7 @@ import json
 import os
 import re
 import signal
+from datetime import datetime
 from typing import Any
 
 try:
@@ -109,6 +110,22 @@ _DUMP_ELLIPSIS_AT = _DUMP_TRUNCATE_AT - 3  # leave room for "..."
 # Preview length for string values shown by the `raw` subcommand.
 _RAW_STRING_PREVIEW = 200
 _RAW_STRING_ELLIPSIS = _RAW_STRING_PREVIEW - 3
+
+# Valid Unix-epoch range for the ``raw`` command's "Time interpretations"
+# block. 2001-01-01 (978307200) to 2200-01-01 (7258118400) in UTC seconds.
+# The window rejects zero, small counters (1, 1000, etc.), and
+# implausibly old/future values while still covering the realistic span
+# of a timestamp field stored in an MMKV database.
+_TIMESTAMP_MIN_SECONDS = 978307200
+_TIMESTAMP_MAX_SECONDS = 7258118400
+
+# Divisors to normalise a timestamp in the named unit to seconds.
+_TIMESTAMP_UNITS: dict[str, int] = {
+    "s": 1,
+    "ms": 1000,
+    "us": 1_000_000,
+    "ns": 1_000_000_000,
+}
 
 _TYPE_CHOICES = (
     "string", "bool", "int32", "uint32", "int64", "uint64", "float", "bytes",
@@ -239,6 +256,27 @@ def _truncate(s: str) -> str:
     if len(s) > _DUMP_TRUNCATE_AT:
         return s[:_DUMP_ELLIPSIS_AT] + "..."
     return s
+
+
+def _format_timestamp(value: int, unit: str) -> str | None:
+    """Format an integer as a local-time datetime when it is a plausible
+    Unix epoch in the given unit.
+
+    Returns the formatted string (``yyyy-MM-dd HH:mm:ss``) if ``value``
+    falls in the 2001-2200 window after unit conversion, ``None``
+    otherwise. The range gate rejects zero, small counters, and values
+    that are almost certainly not timestamps. Local timezone is used
+    because the primary use case is "when did this field last change",
+    where the user wants to recognize the time against their own
+    wall-clock, not compute timezone offsets in their head.
+    """
+    seconds = value / _TIMESTAMP_UNITS[unit]
+    if not (_TIMESTAMP_MIN_SECONDS <= seconds <= _TIMESTAMP_MAX_SECONDS):
+        return None
+    try:
+        return datetime.fromtimestamp(seconds).strftime("%Y-%m-%d %H:%M:%S")
+    except (ValueError, OSError, OverflowError):
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -572,11 +610,43 @@ def cmd_raw(kv: mmkv.MMKV, args: argparse.Namespace) -> int:
         print(f"  String:  (decode error: {e})")
 
     print(f"  Bool:    {_format_value('bool', kv.getBool(key))}")
-    print(f"  Int32:   {kv.getInt(key)}")
-    print(f"  UInt32:  {kv.getUInt(key)}")
-    print(f"  Int64:   {kv.getLongInt(key)}")
-    print(f"  UInt64:  {kv.getLongUInt(key)}")
+    i32 = kv.getInt(key)
+    u32 = kv.getUInt(key)
+    i64 = kv.getLongInt(key)
+    u64 = kv.getLongUInt(key)
+    print(f"  Int32:   {i32}")
+    print(f"  UInt32:  {u32}")
+    print(f"  Int64:   {i64}")
+    print(f"  UInt64:  {u64}")
     print(f"  Float:   {kv.getFloat(key)}")
+
+    # Time interpretations: show any integer reads that land in the
+    # plausible Unix-epoch window (2001-2200). Int32/UInt32 are only
+    # probed as seconds (ms/us/ns are out of range for 32-bit values);
+    # Int64/UInt64 get the full sweep of four units.
+    timestamp_candidates: list[tuple[str, int, str]] = [
+        ("Int32 as seconds", i32, "s"),
+        ("UInt32 as seconds", u32, "s"),
+        ("Int64 as seconds", i64, "s"),
+        ("UInt64 as seconds", u64, "s"),
+        ("Int64 as milliseconds", i64, "ms"),
+        ("UInt64 as milliseconds", u64, "ms"),
+        ("Int64 as microseconds", i64, "us"),
+        ("UInt64 as microseconds", u64, "us"),
+        ("Int64 as nanoseconds", i64, "ns"),
+        ("UInt64 as nanoseconds", u64, "ns"),
+    ]
+    time_rows: list[tuple[str, str]] = []
+    for label, val, unit in timestamp_candidates:
+        formatted = _format_timestamp(val, unit)
+        if formatted is not None:
+            time_rows.append((label, formatted))
+
+    if time_rows:
+        print("\nTime interpretations (if the integer is a Unix epoch):")
+        width = max(len(label) for label, _ in time_rows)
+        for label, formatted in time_rows:
+            print(f"  {label:<{width}}  {formatted}")
     return 0
 
 

@@ -14,6 +14,9 @@ key-value pair in either human-readable or JSON format.
 - **Automatic type inference** — guesses string / JSON / int / float / bool / bytes
 - **Forced typing** — read as a specific type when auto-inference is wrong
 - **Raw hex view** — `get --raw` or the dedicated `raw` subcommand
+- **Timestamp detection in `raw`** — integer values that land in a
+  plausible Unix-epoch window (2001-2200) are also shown as local-time
+  datetimes (seconds / milliseconds / microseconds / nanoseconds)
 - **JSON dump** — pipe straight into `jq`
 - **Syntax-highlighted JSON** — when pygments is installed and stdout is a TTY
 - **Encryption keys** — accepted inline (`--crypt-key`) or from a file (`--crypt-key-file`)
