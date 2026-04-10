@@ -110,13 +110,11 @@ worth preserving:
    flag. Fish's own git/docker completions use the negation pattern
    for the same reason.
 
-3. **Subcommand suggestions go through a per-state gate** driven by
-   `_SUBCOMMANDS_NEEDING_INSTANCE` / `_INSTANCE_SELECTOR_LONGS` (see
-   "Per-subcommand required-flag gating" below). Fish uses a generated
-   helper `__mmkvdump_has_opt` rather than the built-in
-   `__fish_contains_opt` so both ``--dir VAL`` and the inline
-   ``--dir=VAL`` forms are recognized; the helper is emitted once at
-   the top of the completion file and shared by every guard.
+3. **Fish's `__mmkvdump_has_opt` helper** is emitted at the top of
+   the completion file and used by every guard, because fish's
+   built-in `__fish_contains_opt` only matches `--dir VAL` and not
+   the inline `--dir=VAL` form. The per-state gate itself is
+   documented below in "Per-subcommand required-flag gating".
 
 4. **The generated file begins with `complete -c mmkvdump -e`.** Fish
    accumulates `complete` declarations across re-sources rather than
@@ -129,13 +127,11 @@ worth preserving:
 registers it with `complete -F`. Four invariants to preserve:
 
 1. **The `case "$prev" in` dispatcher must list every value-taking
-   flag literally** (not via `-*=*` glob or similar). Bash only fires
-   the correct branch on an exact literal match, and missing one means
-   `--type <TAB>` falls through to the generic state machine and ends
-   up suggesting subcommands instead of the 8 type choices. Opaque
-   value-takers (`--id`, `--crypt-key`, `--grep`) must be present too,
-   with an empty `return` branch, so TAB-after-`--id` is silent rather
-   than incorrectly showing subcommand flags.
+   flag literally** (not `-*=*` globs). Bash only fires on exact
+   match; missing a flag means `--type <TAB>` falls through to the
+   state machine and offers subcommands instead of the 8 type
+   choices. Opaque value-takers (`--id`, `--crypt-key`, `--grep`)
+   need empty `return` branches so TAB-after-`--id` is silent.
 
 2. **The subcommand-detection loop's `skip_pattern` must list the same
    value-taking global flags** so scanning `COMP_WORDS` correctly
@@ -169,14 +165,11 @@ registers it with `complete -F`. Four invariants to preserve:
    both together to register `_comps[mmkvdump]=_mmkvdump`. Break either
    half and the completion is silently inactive.
 
-2. **The file ends with `_mmkvdump "$@"`** -- this is the canonical
-   zsh autoload self-call pattern, not a bug. When compinit autoloads
-   the function, zsh runs the entire file body once; the function
-   definition is followed by an immediate invocation with the
-   inherited args. Sourcing the file directly in a plain shell prints
-   `_arguments: command not found` because the completion system isn't
-   loaded, but that's an artifact of the non-standard usage, not a
-   defect.
+2. **The file ends with `_mmkvdump "$@"`** — canonical zsh autoload
+   self-call, not a bug. compinit autoloads by sourcing the file
+   once; the final line invokes the newly-defined function with the
+   inherited args. Direct sourcing outside compinit prints
+   `_arguments: command not found` — expected, not a defect.
 
 3. **Each subcommand with a positional arg declares it as `'N:name:'`
    in its inner `_arguments` call** (derived from the walker's
@@ -186,12 +179,10 @@ registers it with `complete -F`. Four invariants to preserve:
    had to work around via a `cur == -*` gate.
 
 4. **The required-flag gate lives inside `_mmkvdump_commands`**, not
-   as an `_arguments` exclusion. zsh has no first-class way to express
-   "suggest this action only if token X is present on the command
-   line", so `_mmkvdump_commands` walks `$words` itself and branches
-   the candidate list based on which required globals have been
-   supplied. Same semantics as fish's per-state `__mmkvdump_has_opt`
-   guards and bash's Phase 4b state machine.
+   as an `_arguments` exclusion. zsh can't express "suggest X only
+   if token Y is present" declaratively, so the function walks
+   `$words` itself and branches the candidate list — same semantics
+   as fish's `__mmkvdump_has_opt` and bash's Phase 4b.
 
 ### Per-subcommand required-flag gating lives in module constants
 
@@ -216,6 +207,24 @@ If a new subcommand is added, these constants MUST be updated in the
 same change; otherwise the runtime rejection and the tab suggestions
 will drift out of alignment.
 
+### Tab completion reflects the tool's grammar, not the other way around
+
+When a completion quirk seems to call for a tool-level redesign,
+default to fixing the completion. Completion mirrors the tool's
+acceptance rules; reshaping the tool to make completion simpler
+usually just hides the same usability problem from non-tab users.
+Three decisions in this project went this way:
+
+1. `__fish_use_subcommand` doesn't understand `--dir /path` — fix
+   fish, not argparse.
+2. Subcommand list offered before `--dir` — gate the generators,
+   not reorder the parser.
+3. `keys`/`get`/`dump`/`raw` offered before `--id`/`--default` —
+   per-subcommand gates, not `parents=[common]`.
+
+Tool redesigns for forgiveness are legitimate v2.0 decisions,
+never piggy-backed onto a completion bug fix.
+
 ## Code Style
 
 - **Type hints everywhere**, using Python 3.10+ built-in generics.
@@ -235,6 +244,21 @@ will drift out of alignment.
   checks on `MMKVMode`, `containsKey` availability varies by version,
   etc.). When behavior is unclear, write a tiny probe
   (`python3 -c "..."`) — don't guess from intuition.
+- **Verify external claims before copying.** Docs copied from
+  elsewhere inherit their errors silently. The v1.0 README claimed
+  `pip install mmkv` works; Tencent has never published to PyPI.
+  30 seconds with `pip index versions mmkv` would have caught it.
+  Apply to any external availability claim (PyPI, brew, apt, API
+  signatures).
+- **Byte-identical regression for generator refactors.** Save a
+  `--completion` baseline for each shell before restructuring any
+  generator, then `diff` after. Pure refactors should be
+  byte-identical; intended changes should be surgical enough to
+  confirm by eye.
+- **Walker stays shell-neutral; project knowledge lives at module
+  level.** `_iter_parser_spec` only handles argparse primitives.
+  Project constants (`_SUBCOMMANDS_NEEDING_INSTANCE`, path hints,
+  etc.) are read by each generator. Don't leak in either direction.
 - **Grep before renaming, grep after.** When changing a name, version
   string, or shebang, use `Grep` across the whole project *before* the
   change (to enumerate call sites) and *again after* (to verify nothing
@@ -318,6 +342,24 @@ When changing type inference, always verify with `raw <key>` to see every
 getter's interpretation at once. When touching JSON output, pipe through
 `| jq .` to confirm it's valid strict JSON.
 
+### Shell completion verification, per shell
+
+Non-interactive drivers vary in quality:
+
+- **fish** (best): `fish -c 'source mmkvdump.fish; complete -C
+  "mmkvdump --dir /tmp "'` runs a query in a fresh subshell.
+  Reliable, fast, perfect for regression tables.
+- **bash** (moderate): source the file, set `COMP_WORDS` /
+  `COMP_CWORD`, call `_mmkvdump_completion`, inspect `COMPREPLY`.
+  The v1.2.1 harness (`expect <label> <expected> <words...>`) has
+  21 cases covering every state-machine branch — reuse its shape.
+- **zsh** (poor): no ZLE context under `zsh -c`, so functional
+  driving is effectively impossible. Best you can do: (a) `zsh -n`
+  for syntax, (b) `compinit -u` on a temp `$fpath` to confirm
+  `_comps[mmkvdump]` is set, (c) structural grep, (d) ask the user
+  to tab-test interactively. Don't try to engineer around this
+  inside the generator.
+
 ## Git Workflow
 
 - **Commit requires explicit user approval.** Workflow is always:
@@ -340,6 +382,16 @@ getter's interpretation at once. When touching JSON output, pipe through
   (covers Python cruft, IDE metadata, macOS junk, and `*.local.json`).
   For projects without a solid `.gitignore`, prefer staging specific
   files by name.
+- **`gh release create` subtlety.** The second positional of
+  `gh release create TAG ...` is asset **files** to upload, not the
+  target commit. Passing a commit SHA there makes gh try to open it
+  as a file (`no matches found for '10aad89'`). To tag a historical
+  commit, create the annotated tag locally first
+  (`git tag -a vX.Y.Z <full-sha> -m "vX.Y.Z"`), push it
+  (`git push origin vX.Y.Z`), then run `gh release create vX.Y.Z`
+  which will attach the release notes to the existing tag. The
+  `--target` flag also exists but requires the full SHA (short
+  hashes are rejected by the API).
 
 ## Versioning
 
