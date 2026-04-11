@@ -1723,9 +1723,14 @@ def main() -> int:
     if args.crypt_key_file:
         args.crypt_key_file = os.path.expanduser(args.crypt_key_file)
 
-    # Validate --dir once, up front.
+    # Validate --dir once, up front. Distinguish "missing" from
+    # "exists but is not a directory" so the message points the user at
+    # the right thing to fix (typo in path vs. wrong kind of path).
+    if not os.path.exists(args.dir):
+        print(f"Error: --dir does not exist: {args.dir}", file=sys.stderr)
+        return 1
     if not os.path.isdir(args.dir):
-        print(f"Error: directory does not exist: {args.dir}", file=sys.stderr)
+        print(f"Error: --dir is not a directory: {args.dir}", file=sys.stderr)
         return 1
 
     # `instances` only needs --dir; short-circuit before any MMKV init.
