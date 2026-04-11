@@ -171,16 +171,55 @@ def _mmkv_logger(log_level, file, line, function, message) -> None:
 
 def _error_handler(mmap_id, error_type) -> mmkv.MMKVRecoverStrategic:
     print(f"[{mmap_id}] error: {error_type}", file=sys.stderr)
-    # OnErrorDiscard: leave the on-disk content untouched. The alternative
-    # OnErrorRecover would let MMKV "recover" by zero-ing the unreadable
-    # region, which silently destroys data when an encrypted instance is
-    # opened without (or with the wrong) crypt key -- mmkv treats the
-    # undecryptable bytes as corruption and wipes them. A read-only
-    # inspection tool must never mutate user data, even on the recovery
-    # path; the prior return value `mmkv.MMKVErrorType.OnErrorRecover`
-    # was doubly wrong: that attribute does not exist on MMKVErrorType,
-    # and the intent ("recover") is incompatible with the read-only
-    # contract this tool advertises.
+    # Return OnErrorDiscard, NOT OnErrorRecover. This file has already
+    # shipped the wrong value once, so the rationale is documented in
+    # full -- if you are tempted to "fix" this back, read all four
+    # points first.
+    #
+    # 1. The Java enum doc comment in upstream MMKV
+    #    (Android/MMKV/mmkv/src/main/java/com/tencent/mmkv/
+    #    MMKVRecoverStrategic.java) reads
+    #    "OnErrorDiscard: discard everything on errors", which sounds
+    #    like OnErrorDiscard is the destructive option. It is not.
+    #    "Everything" in that sentence refers to the failed-to-decode
+    #    in-memory dictionary built during this load attempt, not the
+    #    on-disk bytes.
+    #
+    # 2. Confirmed against Core/MMKV_IO.cpp::checkDataValid (lines ~345
+    #    and ~362 at time of writing -- search for `onMMKVCRCCheckFail`
+    #    and `onMMKVFileLengthError` if line numbers have drifted).
+    #    When the CRC check fails because decryption produced garbage:
+    #
+    #      OnErrorRecover -> sets needFullWriteback=true. Later in
+    #          MMKV::loadFromFile (around line 127) the code then calls
+    #          fullWriteback(), which serializes the (empty, because
+    #          nothing decoded) in-memory dictionary back to disk and
+    #          OVERWRITES the original encrypted payload bytes.
+    #
+    #      OnErrorDiscard -> needFullWriteback stays false, loading is
+    #          skipped, in-memory state stays empty, the file is never
+    #          touched.
+    #
+    # 3. Defense in depth: Core/MMKV.cpp::onMMKVCRCCheckFail returns
+    #    OnErrorDiscard when no error handler is registered at all
+    #    (around line 1729). MMKV's own library default is the safe
+    #    one -- which would be absurd if OnErrorDiscard were the
+    #    destructive option.
+    #
+    # 4. Empirical: opening the encrypted SPCronetConfig sample
+    #    without the crypt key under this handler keeps the file
+    #    md5-stable across repeated open/close cycles; the same
+    #    operation under the previous OnErrorRecover return value
+    #    wiped the file to all zeros. Both vectors line up with the
+    #    source.
+    #
+    # The original buggy return value `mmkv.MMKVErrorType.OnErrorRecover`
+    # was doubly wrong: OnErrorRecover is not a member of MMKVErrorType
+    # (whose only members are CRCCheckFail and FileLength), so the
+    # handler would have raised AttributeError if it had ever fired;
+    # and the *intent* of "recover" is fundamentally incompatible with
+    # the strictly-read-only contract this tool advertises in
+    # CLAUDE.md.
     return mmkv.MMKVRecoverStrategic.OnErrorDiscard
 
 
