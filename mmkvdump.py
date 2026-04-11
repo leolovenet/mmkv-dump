@@ -13,7 +13,7 @@ Prerequisite:
 # fail to parse the `str | None` annotations used throughout the script).
 from __future__ import annotations
 
-__version__ = "1.3"
+__version__ = "1.4"
 
 import sys
 
@@ -1698,6 +1698,48 @@ def _open_mmkv(args: argparse.Namespace) -> mmkv.MMKV:
     return mmkv.MMKV(args.id, mode)
 
 
+def _warn_if_unreadable(kv: mmkv.MMKV, args: argparse.Namespace) -> bool:
+    """Warn when an opened instance reports payload bytes but zero keys.
+
+    A non-encrypted, truly empty database has ``actualSize == 0`` -- the
+    header records no payload, ``count() == 0``, and the user gets a
+    legitimately empty result. An encrypted database opened without (or
+    with the wrong) crypt key looks very different: the header still
+    records the original payload size (``actualSize > 0``), but every
+    entry's decryption produces garbage that fails to parse, so
+    ``count() == 0``. The mmkv binding does NOT raise or fire the
+    registered error handler in this case -- it silently returns an
+    empty instance, which is exactly the "confidently lying" behavior
+    this tool exists to avoid.
+
+    Detection rule: ``count() == 0 and actualSize() > 0`` -> warn.
+    Returns True iff the warning fired so the caller can promote a
+    successful exit code to 2 (distinct from the existing exit-1
+    "key not found" / "parse error" codes used elsewhere).
+    """
+    if kv.count() != 0 or kv.actualSize() == 0:
+        return False
+    size = _format_size(kv.actualSize())
+    print(
+        f"Warning: instance has {size} of on-disk data but 0 keys "
+        f"were decoded.",
+        file=sys.stderr,
+    )
+    if args.crypt_key is None:
+        print(
+            "  The database is likely encrypted. Provide the key with "
+            "--crypt-key or --crypt-key-file.",
+            file=sys.stderr,
+        )
+    else:
+        print(
+            "  The supplied --crypt-key may be wrong (decryption "
+            "produces no decodable entries).",
+            file=sys.stderr,
+        )
+    return True
+
+
 def _install_sigpipe_handler() -> None:
     """Restore default SIGPIPE so piping to `head`/`less` doesn't leave
     an ugly BrokenPipeError traceback.
@@ -1765,13 +1807,23 @@ def main() -> int:
 
     try:
         kv = _open_mmkv(args)
+        unreadable = _warn_if_unreadable(kv, args)
         commands = {
             "keys": cmd_keys,
             "get": cmd_get,
             "dump": cmd_dump,
             "raw": cmd_raw,
         }
-        return commands[args.command](kv, args)
+        rc = commands[args.command](kv, args)
+        # When we proved the empty output is fake (data is on disk but
+        # we couldn't decode it), promote a success exit code to 2 so
+        # scripts can branch on it. Don't touch a non-zero rc -- the
+        # subcommand's own error (e.g. cmd_get's "key not found" -> 1)
+        # already conveys "you got nothing" with more specificity than
+        # this generic "we couldn't read the instance" signal.
+        if unreadable and rc == 0:
+            rc = 2
+        return rc
     finally:
         mmkv.MMKV.onExit()
 
