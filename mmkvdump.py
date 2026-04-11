@@ -1771,8 +1771,12 @@ def _warn_if_unreadable(kv: mmkv.MMKV, args: argparse.Namespace) -> bool:
             file=sys.stderr,
         )
     else:
+        # "the supplied crypt key", not "--crypt-key": the key may have
+        # been read from a file via --crypt-key-file, in which case the
+        # user never typed `--crypt-key` on the command line and that
+        # name would be confusing to them.
         print(
-            "  The supplied --crypt-key may be wrong (decryption "
+            "  The supplied crypt key may be wrong (decryption "
             "produces no decodable entries).",
             file=sys.stderr,
         )
