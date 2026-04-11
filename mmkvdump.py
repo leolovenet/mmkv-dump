@@ -169,9 +169,19 @@ def _mmkv_logger(log_level, file, line, function, message) -> None:
     print(f"[{tag}] <{file}:{line}:{function}> {message}", file=sys.stderr)
 
 
-def _error_handler(mmap_id, error_type) -> mmkv.MMKVErrorType:
+def _error_handler(mmap_id, error_type) -> mmkv.MMKVRecoverStrategic:
     print(f"[{mmap_id}] error: {error_type}", file=sys.stderr)
-    return mmkv.MMKVErrorType.OnErrorRecover
+    # OnErrorDiscard: leave the on-disk content untouched. The alternative
+    # OnErrorRecover would let MMKV "recover" by zero-ing the unreadable
+    # region, which silently destroys data when an encrypted instance is
+    # opened without (or with the wrong) crypt key -- mmkv treats the
+    # undecryptable bytes as corruption and wipes them. A read-only
+    # inspection tool must never mutate user data, even on the recovery
+    # path; the prior return value `mmkv.MMKVErrorType.OnErrorRecover`
+    # was doubly wrong: that attribute does not exist on MMKVErrorType,
+    # and the intent ("recover") is incompatible with the read-only
+    # contract this tool advertises.
+    return mmkv.MMKVRecoverStrategic.OnErrorDiscard
 
 
 def _content_change_handler(mmap_id) -> None:
